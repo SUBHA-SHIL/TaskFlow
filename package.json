@@ -1,0 +1,32 @@
+{
+  "name": "taskflow",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A distributed, fault-tolerant background job processing system",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+  "build": "npm run build -w @taskflow/config && npm run build -w @taskflow/shared && npm run build -w @taskflow/database && npm run build -w @taskflow/api && npm run build -w @taskflow/dispatcher && npm run build -w @taskflow/worker",
+  "test": "npm run test --workspaces --if-present",
+  "typecheck": "npm run build -w @taskflow/config && npm run build -w @taskflow/shared && npm run build -w @taskflow/database && npm run typecheck --workspaces --if-present",
+  "lint": "eslint .",
+  "format": "prettier --write .",
+  "format:check": "prettier --check ."
+},
+  "keywords": [],
+  "author": "Subha",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0",
+    "prettier": "^3.10.1",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.2"
+  }
+}

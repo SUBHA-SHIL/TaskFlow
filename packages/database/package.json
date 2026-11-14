@@ -1,0 +1,28 @@
+{
+  "name": "@taskflow/database",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "migrate:create": "node-pg-migrate create --migrations-dir migrations --migration-file-language sql",
+    "migrate:up": "node --env-file=../../.env ../../node_modules/node-pg-migrate/bin/node-pg-migrate.js up --migrations-dir migrations --migrations-table taskflow_migrations",
+    "migrate:down": "node --env-file=../../.env ../../node_modules/node-pg-migrate/bin/node-pg-migrate.js down --migrations-dir migrations --migrations-table taskflow_migrations"
+  },
+  "dependencies": {
+    "node-pg-migrate": "^9.0.0",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
+}
