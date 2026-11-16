@@ -28,6 +28,7 @@ export interface GetJobResponse {
     createdAt: string;
     updatedAt: string;
     completedAt: string | null;
+    totalAttempts: number;
 }
 
 export interface JobListItem {
