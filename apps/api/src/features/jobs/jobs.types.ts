@@ -1,6 +1,6 @@
 export interface CreateJobResponse {
     jobId: string;
-    status: 'pending';
+    status: GetJobResponse['status'];
     jobType: string;
     createdAt: string;
 }
@@ -66,10 +66,10 @@ export interface CancelJobResponse {
 }
 
 export interface RetryJobResponse {
-  jobId: string;
-  status: 'pending';
-  previousStatus: 'failed' | 'dead';
-  attempts: number;
+    jobId: string;
+    status: 'pending';
+    previousStatus: 'failed' | 'dead';
+    attempts: number;
 }
 
 

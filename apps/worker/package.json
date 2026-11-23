@@ -7,9 +7,11 @@
     "dev": "node --env-file=../../.env --import tsx --watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "start": "node dist/index.js"
+    "start": "node --env-file=../../.env dist/index.js"
   },
   "dependencies": {
-    "@taskflow/config": "^1.0.0"
+    "@taskflow/config": "^1.0.0",
+    "@taskflow/database": "^1.0.0",
+    "@taskflow/messaging": "^1.0.0"
   }
 }

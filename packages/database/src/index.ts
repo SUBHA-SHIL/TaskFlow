@@ -3,4 +3,7 @@ export {
   checkDatabaseConnection,
   closeDatabaseConnection,
 } from './client.js';
+
 export { withTransaction } from './transaction.js';
+
+export type { PoolClient } from 'pg';

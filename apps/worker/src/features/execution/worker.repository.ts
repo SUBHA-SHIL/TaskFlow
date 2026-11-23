@@ -47,12 +47,33 @@ export async function registerWorker(): Promise<RegisteredWorker> {
 export async function stopWorker(workerId: string): Promise<void> {
   await pool.query(
     `UPDATE workers
-     SET
-       status = 'stopped',
-       updated_at = NOW()
-     WHERE worker_id = $1`,
+   SET
+     status = 'stopped',
+     updated_at = NOW()
+   WHERE worker_id = $1
+     AND status <> 'lost'`,
     [workerId],
   );
 
   console.log(`Worker ${workerId} marked as stopped.`);
+}
+
+export async function updateWorkerHeartbeat(
+  workerId: string,
+): Promise<void> {
+  const result = await pool.query(
+    `UPDATE workers
+     SET
+       last_heartbeat_at = clock_timestamp(),
+       updated_at = clock_timestamp()
+     WHERE worker_id = $1
+       AND status = 'active'`,
+    [workerId],
+  );
+
+  if (result.rowCount !== 1) {
+    throw new Error(
+      `Worker heartbeat update failed for ${workerId}`,
+    );
+  }
 }

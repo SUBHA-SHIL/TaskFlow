@@ -1,18 +1,23 @@
-
 import { withTransaction } from '@taskflow/database';
+
+export type JobCompletionResult =
+  | 'completed'
+  | 'cancellation_requested'
+  | 'ownership_lost';
 
 export async function completeJob(
   jobId: string,
   workerId: string,
   result: unknown,
-): Promise<boolean> {
+): Promise<JobCompletionResult> {
   return withTransaction(async (client) => {
-    // Verify that this worker still owns the running job.
+    // Verify ownership and retrieve the cancellation state.
     const jobResult = await client.query<{
       attempts: number;
       total_attempts: number;
+      cancel_requested_at: Date | null;
     }>(
-      `SELECT attempts, total_attempts
+      `SELECT attempts, total_attempts, cancel_requested_at
        FROM jobs
        WHERE job_id = $1
          AND status = 'running'
@@ -25,7 +30,12 @@ export async function completeJob(
     const job = jobResult.rows[0];
 
     if (!job) {
-      return false;
+      return 'ownership_lost';
+    }
+
+    // Cancellation takes precedence over successful completion.
+    if (job.cancel_requested_at !== null) {
+      return 'cancellation_requested';
     }
 
     const serializedResult = JSON.stringify(result ?? null);
@@ -36,15 +46,16 @@ export async function completeJob(
        SET
          status = 'completed',
          result = $3::jsonb,
-         completed_at = NOW(),
+         completed_at = clock_timestamp(),
          locked_by = NULL,
          locked_at = NULL,
          lease_expires_at = NULL,
-         updated_at = NOW()
+         updated_at = clock_timestamp()
        WHERE job_id = $1
          AND status = 'running'
          AND locked_by = $2
-         AND lease_expires_at > clock_timestamp()`,
+         AND lease_expires_at > clock_timestamp()
+         AND cancel_requested_at IS NULL`,
       [jobId, workerId, serializedResult],
     );
 
@@ -60,7 +71,7 @@ export async function completeJob(
        SET
          status = 'completed',
          result = $3::jsonb,
-         finished_at = NOW()
+         finished_at = clock_timestamp()
        WHERE job_id = $1
          AND worker_id = $2
          AND attempt_number = $4
@@ -100,6 +111,6 @@ export async function completeJob(
       [jobId, workerId, job.total_attempts, job.attempts],
     );
 
-    return true;
+    return 'completed';
   });
 }

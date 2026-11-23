@@ -11,23 +11,24 @@ export async function createJob(
     input: CreateJobInput,
 ): Promise<CreateJobResponse> {
     const jobId = randomUUID();
-
     const eventId = randomUUID();
 
-    const createdAt = new Date();
-
-    await withTransaction(async (client) => {
-        await client.query(
+    return withTransaction(async (client) => {
+        const insertResult = await client.query(
             `INSERT INTO jobs (
-        job_id,
-        job_type,
-        payload,
-        priority,
-        max_attempts,
-        idempotency_key,
-        status
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, 'pending')`,
+                job_id,
+                job_type,
+                payload,
+                priority,
+                max_attempts,
+                idempotency_key,
+                status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+            ON CONFLICT (idempotency_key)
+            WHERE idempotency_key IS NOT NULL
+            DO NOTHING
+            RETURNING job_id, job_type, status, created_at`,
             [
                 jobId,
                 input.jobType,
@@ -38,15 +39,41 @@ export async function createJob(
             ],
         );
 
+        const insertedJob = insertResult.rows[0];
+
+        if (!insertedJob) {
+            const existingResult = await client.query(
+                `SELECT job_id, job_type, status, created_at
+                 FROM jobs
+                 WHERE idempotency_key = $1`,
+                [input.idempotencyKey],
+            );
+
+            const existingJob = existingResult.rows[0];
+
+            if (!existingJob) {
+                throw new Error(
+                    'Unable to retrieve the job for the supplied idempotency key',
+                );
+            }
+
+            return {
+                jobId: existingJob.job_id,
+                status: existingJob.status,
+                jobType: existingJob.job_type,
+                createdAt: existingJob.created_at.toISOString(),
+            };
+        }
+
         await client.query(
             `INSERT INTO outbox_events (
-        outbox_id,
-        aggregate_type,
-        aggregate_id,
-        event_type,
-        payload
-      )
-      VALUES ($1, 'job', $2, 'job.created', $3)`,
+                outbox_id,
+                aggregate_type,
+                aggregate_id,
+                event_type,
+                payload
+            )
+            VALUES ($1, 'job', $2, 'job.created', $3)`,
             [
                 eventId,
                 jobId,
@@ -57,14 +84,14 @@ export async function createJob(
                 }),
             ],
         );
-    });
 
-    return {
-        jobId,
-        status: 'pending',
-        jobType: input.jobType,
-        createdAt: createdAt.toISOString(),
-    };
+        return {
+            jobId: insertedJob.job_id,
+            status: insertedJob.status,
+            jobType: insertedJob.job_type,
+            createdAt: insertedJob.created_at.toISOString(),
+        };
+    });
 }
 
 export async function getJobById(

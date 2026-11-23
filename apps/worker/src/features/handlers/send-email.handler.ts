@@ -1,4 +1,4 @@
-
+import { setTimeout as delay } from 'node:timers/promises';
 import type {
   JobHandler,
   JobHandlerContext,
@@ -22,11 +22,22 @@ export const sendEmailHandler: JobHandler = async (
 
   console.log('Processing email job:', {
     jobId: context.jobId,
+    idempotencyKey: context.idempotencyKey,
     workerId: context.workerId,
     attempt: context.attempt,
     to,
     subject,
   });
+
+  // Simulate an email delivery operation that supports cancellation.
+  await delay(10_000, undefined, {
+    signal: context.signal,
+  });
+
+  // Do not continue if cancellation was requested.
+  if (context.signal.aborted) {
+    throw context.signal.reason ?? new Error('Job execution aborted');
+  }
 
   // Simulated email delivery.
   console.log(`Simulated email sent to ${to}`);

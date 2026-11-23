@@ -1,8 +1,13 @@
-
+import { cancelRunningJob } from './job-cancellation.repository.js';
 import { completeJob } from './job-completion.repository.js';
 import { failJob } from './job-failure.repository.js';
 import { claimJob } from './job.repository.js';
-import { renewJobLease } from './lease.repository.js';
+import {
+  checkJobCancellation,
+  renewJobLease,
+  type CancellationCheckResult,
+  type LeaseRenewalResult,
+} from './lease.repository.js';
 import { getHandler } from '../handlers/handler.registry.js';
 
 const LEASE_RENEWAL_INTERVAL_MS = 20_000;
@@ -10,41 +15,67 @@ const LEASE_RENEWAL_INTERVAL_MS = 20_000;
 export type JobExecutionResult =
   | { status: 'not_claimed' }
   | { status: 'completed' }
+  | { status: 'cancelled' }
   | { status: 'retry_scheduled'; retryAt: Date }
   | { status: 'dead' }
   | { status: 'ownership_lost' };
 
-// Periodically renew the lease while a handler is executing.
+
+const CANCELLATION_CHECK_INTERVAL_MS = 1_000;
+
 function startLeaseRenewal(jobId: string, workerId: string) {
   const controller = new AbortController();
 
-  let ownershipLost = false;
-  let renewalInFlight: Promise<void> | null = null;
+  let state: LeaseRenewalResult = 'renewed';
 
-  const timer = setInterval(() => {
-    // Prevent overlapping renewal requests.
-    if (renewalInFlight) {
+  let renewalInFlight: Promise<void> | null = null;
+  let cancellationCheckInFlight: Promise<void> | null = null;
+
+  async function handleStateChange(
+    result: LeaseRenewalResult | CancellationCheckResult,
+    source: string,
+  ): Promise<void> {
+    if (result === 'active' || result === 'renewed') {
+      return;
+    }
+
+    if (state !== 'renewed') {
+      return;
+    }
+
+    state = result;
+
+    controller.abort(
+      new Error(
+        result === 'cancellation_requested'
+          ? `Cancellation requested for job ${jobId}`
+          : `Lease ownership lost for job ${jobId}`,
+      ),
+    );
+
+    if (source === 'lease renewal') {
+      console.error('Job lease renewal failed:', {
+        jobId,
+        workerId,
+        result,
+      });
+    }
+  }
+
+  const renewalTimer = setInterval(() => {
+    if (renewalInFlight || state !== 'renewed') {
       return;
     }
 
     renewalInFlight = (async () => {
       try {
-        const renewed = await renewJobLease(jobId, workerId);
-
-        if (!renewed) {
-          ownershipLost = true;
-
-          controller.abort(
-            new Error(`Lease ownership lost for job ${jobId}`),
-          );
-        }
+        const result = await renewJobLease(jobId, workerId);
+        await handleStateChange(result, 'lease renewal');
       } catch (error) {
-        ownershipLost = true;
+        state = 'ownership_lost';
 
         controller.abort(
-          error instanceof Error
-            ? error
-            : new Error(String(error)),
+          error instanceof Error ? error : new Error(String(error)),
         );
 
         console.error('Job lease renewal failed:', {
@@ -58,20 +89,64 @@ function startLeaseRenewal(jobId: string, workerId: string) {
     })();
   }, LEASE_RENEWAL_INTERVAL_MS);
 
+  const cancellationTimer = setInterval(() => {
+    if (cancellationCheckInFlight || state !== 'renewed') {
+      return;
+    }
+
+    cancellationCheckInFlight = (async () => {
+      try {
+        const result = await checkJobCancellation(jobId, workerId);
+        await handleStateChange(result, 'cancellation check');
+      } catch (error) {
+        state = 'ownership_lost';
+
+        controller.abort(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+
+        console.error('Job cancellation check failed:', {
+          jobId,
+          workerId,
+          error,
+        });
+      } finally {
+        cancellationCheckInFlight = null;
+      }
+    })();
+  }, CANCELLATION_CHECK_INTERVAL_MS);
+
   return {
     signal: controller.signal,
 
-    async stop(): Promise<boolean> {
-      clearInterval(timer);
+    async stop(): Promise<LeaseRenewalResult> {
+      clearInterval(renewalTimer);
+      clearInterval(cancellationTimer);
 
-      // Wait for an already-running renewal to finish.
-      if (renewalInFlight) {
-        await renewalInFlight;
-      }
+      const pendingOperations = [
+        renewalInFlight,
+        cancellationCheckInFlight,
+      ].filter(
+        (operation): operation is Promise<void> => operation !== null,
+      );
 
-      return !ownershipLost;
+      await Promise.all(pendingOperations);
+
+      return state;
     },
   };
+}
+
+
+async function persistCancellation(
+  jobId: string,
+  workerId: string,
+): Promise<JobExecutionResult> {
+  const cancelled = await cancelRunningJob(jobId, workerId);
+
+  return cancelled
+    ? { status: 'cancelled' }
+    : { status: 'ownership_lost' };
 }
 
 export async function executeJob(
@@ -100,6 +175,10 @@ export async function executeJob(
       return { status: 'ownership_lost' };
     }
 
+    if (failure.status === 'cancelled') {
+      return { status: 'cancelled' };
+    }
+
     if (failure.status === 'dead') {
       return { status: 'dead' };
     }
@@ -121,17 +200,22 @@ export async function executeJob(
       jobId: job.jobId,
       workerId,
       attempt: job.attempts,
+      idempotencyKey: job.jobId,
       signal: lease.signal,
     });
   } catch (error) {
-    // Stop renewal before recording the failure.
-    const stillOwnsJob = await lease.stop();
+    // Stop renewal before recording the outcome.
+    const leaseState = await lease.stop();
 
-    if (!stillOwnsJob) {
+    if (leaseState === 'ownership_lost') {
       return { status: 'ownership_lost' };
     }
 
-    // 6. Record the failure and schedule a retry if allowed.
+    if (leaseState === 'cancellation_requested') {
+      return persistCancellation(job.jobId, workerId);
+    }
+
+    // 6. Record a normal failure and schedule a retry if allowed.
     const failure = await failJob(job.jobId, workerId, error);
 
     if (!failure) {
@@ -149,17 +233,29 @@ export async function executeJob(
   }
 
   // 7. Stop renewal and verify ownership.
-  const stillOwnsJob = await lease.stop();
+  const leaseState = await lease.stop();
 
-  if (!stillOwnsJob) {
+  if (leaseState === 'ownership_lost') {
     return { status: 'ownership_lost' };
   }
 
-  // 8. Persist the successful result.
-  const completed = await completeJob(job.jobId, workerId, result);
+  if (leaseState === 'cancellation_requested') {
+    return persistCancellation(job.jobId, workerId);
+  }
 
-  if (!completed) {
+  // 8. Persist the successful result.
+  const completion = await completeJob(
+    job.jobId,
+    workerId,
+    result,
+  );
+
+  if (completion === 'ownership_lost') {
     return { status: 'ownership_lost' };
+  }
+
+  if (completion === 'cancellation_requested') {
+    return persistCancellation(job.jobId, workerId);
   }
 
   return { status: 'completed' };

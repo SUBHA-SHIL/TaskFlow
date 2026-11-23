@@ -1,3 +1,4 @@
+
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -14,6 +15,9 @@ import { env } from './config/env.js';
 import { publishPendingOutboxEvents } from './features/outbox-publisher/outbox.service.js';
 
 const dispatcherId = randomUUID();
+
+const INITIAL_RECONNECT_DELAY_MS = 1_000;
+const MAX_RECONNECT_DELAY_MS = 30_000;
 
 let isShuttingDown = false;
 
@@ -37,22 +41,104 @@ async function main(): Promise<void> {
     | Awaited<ReturnType<typeof createRabbitMQConfirmChannel>>
     | undefined;
 
-  try {
+  let connectionFailed = false;
+  let channelFailed = false;
+  let reconnectAttempts = 0;
+
+  async function closeRabbitMQ(): Promise<void> {
+    const currentChannel = channel;
+    const currentConnection = connection;
+
+    channel = undefined;
+    connection = undefined;
+
+    if (currentChannel) {
+      await currentChannel.close().catch(() => undefined);
+    }
+
+    if (currentConnection) {
+      await currentConnection.close().catch(() => undefined);
+    }
+
+    connectionFailed = false;
+    channelFailed = false;
+  }
+
+  async function connectRabbitMQ(): Promise<void> {
     connection = await createRabbitMQConnection(rabbitMQUrl);
+
+    connection.on('error', (error) => {
+      console.error('Dispatcher RabbitMQ connection error:', error);
+      connectionFailed = true;
+    });
+
+    connection.on('close', () => {
+      console.error('Dispatcher RabbitMQ connection closed.');
+      connectionFailed = true;
+    });
 
     channel = await createRabbitMQConfirmChannel(connection);
 
+    channel.on('error', (error) => {
+      console.error('Dispatcher RabbitMQ channel error:', error);
+      channelFailed = true;
+    });
+
+    channel.on('close', () => {
+      console.error('Dispatcher RabbitMQ channel closed.');
+      channelFailed = true;
+    });
+
     await assertTaskQueue(channel);
 
-    console.log('TaskFlow dispatcher started.');
-    console.log(`Dispatcher ID: ${dispatcherId}`);
+    connectionFailed = false;
+    channelFailed = false;
+    reconnectAttempts = 0;
+
     console.log('RabbitMQ connection established.');
     console.log('Job queue is ready.');
+  }
+
+  try {
+    console.log('TaskFlow dispatcher started.');
+    console.log(`Dispatcher ID: ${dispatcherId}`);
 
     while (!isShuttingDown) {
+      if (!connection || !channel || connectionFailed || channelFailed) {
+        await closeRabbitMQ();
+
+        if (isShuttingDown) {
+          break;
+        }
+
+        try {
+          await connectRabbitMQ();
+        } catch (error) {
+          await closeRabbitMQ();
+
+          reconnectAttempts++;
+
+          const delay = Math.min(
+            INITIAL_RECONNECT_DELAY_MS *
+              2 ** Math.min(reconnectAttempts - 1, 5),
+            MAX_RECONNECT_DELAY_MS,
+          );
+
+          console.error('RabbitMQ connection failed:', error);
+          console.log(`Retrying RabbitMQ connection in ${delay} ms.`);
+
+          await sleep(delay);
+          continue;
+        }
+      }
+
+      if (isShuttingDown) {
+        break;
+      }
+
       try {
         const publishedCount = await publishPendingOutboxEvents(
-          channel,
+          channel!,
           dispatcherId,
           env.DISPATCHER_BATCH_SIZE,
         );
@@ -73,26 +159,19 @@ async function main(): Promise<void> {
   } finally {
     console.log('Shutting down dispatcher...');
 
-    if (channel) {
-      await channel.close().catch(console.error);
-    }
-
-    if (connection) {
-      await connection.close().catch(console.error);
-    }
-
+    await closeRabbitMQ();
     await closeDatabaseConnection();
 
     console.log('Dispatcher stopped.');
   }
 }
 
-process.on('SIGINT', () => {
+process.once('SIGINT', () => {
   console.log('Received SIGINT.');
   isShuttingDown = true;
 });
 
-process.on('SIGTERM', () => {
+process.once('SIGTERM', () => {
   console.log('Received SIGTERM.');
   isShuttingDown = true;
 });

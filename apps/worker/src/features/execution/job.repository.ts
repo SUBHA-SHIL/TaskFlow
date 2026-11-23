@@ -1,4 +1,4 @@
-
+import { JOB_LEASE_DURATION_SECONDS } from './lease.repository.js';
 import { withTransaction } from '@taskflow/database';
 
 export interface ClaimedJob {
@@ -72,13 +72,14 @@ export async function claimJob(
                 status = 'running',
                 locked_by = $2,
                 locked_at = NOW(),
-                lease_expires_at = NOW() + INTERVAL '60 seconds',
+                lease_expires_at = clock_timestamp()
+    + ($3::integer * INTERVAL '1 second'),
                 attempts = attempts + 1,
                 total_attempts = total_attempts + 1,
                 updated_at = NOW()
              WHERE job_id = $1
              RETURNING attempts, total_attempts`,
-            [jobId, workerId],
+            [jobId, workerId, JOB_LEASE_DURATION_SECONDS],
         );
 
         const updatedJob = updateResult.rows[0];

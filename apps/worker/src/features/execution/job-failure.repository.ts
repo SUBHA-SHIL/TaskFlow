@@ -2,7 +2,7 @@
 import { withTransaction } from '@taskflow/database';
 
 export interface JobFailureResult {
-    status: 'retry_scheduled' | 'dead';
+    status: 'retry_scheduled' | 'dead' | 'cancelled';
     attempts: number;
     retryAt: Date | null;
 }
@@ -18,8 +18,9 @@ export async function failJob(
             attempts: number;
             total_attempts: number;
             max_attempts: number;
+            cancel_requested_at: Date | null;
         }>(
-            `SELECT attempts, total_attempts, max_attempts
+            `SELECT attempts, total_attempts, max_attempts, cancel_requested_at
              FROM jobs
              WHERE job_id = $1
                AND status = 'running'
@@ -33,6 +34,79 @@ export async function failJob(
 
         if (!job) {
             return null;
+        }
+        // Cancellation takes precedence over normal failure handling.
+        if (job.cancel_requested_at !== null) {
+            const attemptResult = await client.query(
+                `UPDATE job_attempts
+         SET
+           status = 'cancelled',
+           error_message = 'Job cancellation requested',
+           finished_at = clock_timestamp()
+         WHERE job_id = $1
+           AND worker_id = $2
+           AND attempt_number = $3
+           AND status = 'running'`,
+                [jobId, workerId, job.total_attempts],
+            );
+
+            if (attemptResult.rowCount !== 1) {
+                throw new Error(
+                    `Could not cancel attempt ${job.total_attempts} for job ${jobId}`,
+                );
+            }
+
+            const updateResult = await client.query(
+                `UPDATE jobs
+         SET
+           status = 'cancelled',
+           completed_at = clock_timestamp(),
+           locked_by = NULL,
+           locked_at = NULL,
+           lease_expires_at = NULL,
+           updated_at = clock_timestamp()
+         WHERE job_id = $1
+           AND status = 'running'
+           AND locked_by = $2
+           AND cancel_requested_at IS NOT NULL
+         RETURNING job_id`,
+                [jobId, workerId],
+            );
+
+            if (updateResult.rowCount !== 1) {
+                throw new Error(`Failed to cancel job ${jobId}`);
+            }
+
+            await client.query(
+                `INSERT INTO job_events (
+           job_id,
+           worker_id,
+           event_type,
+           previous_status,
+           new_status,
+           actor_type,
+           metadata
+         )
+         VALUES (
+           $1,
+           $2,
+           'job.cancelled',
+           'running',
+           'cancelled',
+           'worker',
+           jsonb_build_object(
+             'attemptNumber', $3::integer,
+             'retryCycleAttempt', $4::integer
+           )
+         )`,
+                [jobId, workerId, job.total_attempts, job.attempts],
+            );
+
+            return {
+                status: 'cancelled',
+                attempts: job.attempts,
+                retryAt: null,
+            };
         }
 
         const errorMessage =

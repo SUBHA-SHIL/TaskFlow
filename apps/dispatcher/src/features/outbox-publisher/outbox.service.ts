@@ -60,12 +60,19 @@ export async function publishPendingOutboxEvents(
         error,
       );
 
-      await markOutboxEventAsFailed(
-        event.outboxId,
-        dispatcherId,
-        event.attempts,
-        error,
-      );
+      try {
+        await markOutboxEventAsFailed(
+          event.outboxId,
+          dispatcherId,
+          event.attempts,
+          error,
+        );
+      } catch (recordingError) {
+        console.error(
+          `Failed to record failure for outbox event ${event.outboxId}:`,
+          recordingError,
+        );
+      }
     }
   }
 

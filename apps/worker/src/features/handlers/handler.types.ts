@@ -2,6 +2,10 @@ export interface JobHandlerContext {
   jobId: string;
   workerId: string;
   attempt: number;
+
+  // Stable across retries and worker reassignment.
+  idempotencyKey: string;
+
   signal: AbortSignal;
 }
 
