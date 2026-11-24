@@ -1088,6 +1088,5 @@ RabbitMQ requeued the original unacknowledged message.
 
 ## License
 
-No license has been specified in the project information available for
-this README. Add a `LICENSE` file and update this section before
-publishing the repository publicly.
+Right now no license has been specified in the project information available for
+this README.
