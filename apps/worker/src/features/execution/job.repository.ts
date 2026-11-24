@@ -13,6 +13,7 @@ export async function claimJob(
     jobId: string,
     workerId: string,
 ): Promise<ClaimedJob | null> {
+
     return withTransaction(async (client) => {
         // Verify that the worker is registered and active.
         const workerResult = await client.query(
