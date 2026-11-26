@@ -2,12 +2,11 @@ import type { PoolClient } from 'pg';
 
 import { pool } from './client.js';
 
-export async function withTransaction<T>(
-  callback: (client: PoolClient) => Promise<T>,
-): Promise<T> {
+export async function withTransaction<T>(callback: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
 
   let transactionStarted = false;
+  let releaseError: Error | undefined;
 
   try {
     await client.query('BEGIN');
@@ -24,12 +23,15 @@ export async function withTransaction<T>(
       try {
         await client.query('ROLLBACK');
       } catch (rollbackError) {
+        releaseError =
+          rollbackError instanceof Error ? rollbackError : new Error(String(rollbackError));
+
         console.error('Transaction rollback failed:', rollbackError);
       }
     }
 
     throw error;
   } finally {
-    client.release();
+    client.release(releaseError);
   }
 }

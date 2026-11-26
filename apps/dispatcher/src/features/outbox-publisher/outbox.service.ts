@@ -22,12 +22,15 @@ export async function publishPendingOutboxEvents(
   for (const event of events) {
     try {
       // Retrieve the authoritative job type from PostgreSQL.
-      const result = await pool.query<{ job_type: string }>(
+      const result = await pool.query<{
+        job_type: string;
+        priority: number;
+      }>(
         `
-          SELECT job_type
-          FROM jobs
-          WHERE job_id = $1
-        `,
+    SELECT job_type, priority
+    FROM jobs
+    WHERE job_id = $1
+  `,
         [event.aggregateId],
       );
 
@@ -41,6 +44,7 @@ export async function publishPendingOutboxEvents(
       await publishJob(channel, {
         jobId: event.aggregateId,
         jobType: job.job_type,
+        priority: job.priority,
       });
 
       // Mark the event published only after confirmation.

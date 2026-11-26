@@ -9,6 +9,7 @@ import {
 export interface JobMessage {
   jobId: string;
   jobType: string;
+  priority: number;
 }
 
 function waitForDrain(channel: ConfirmChannel): Promise<void> {
@@ -56,6 +57,7 @@ export async function publishJob(
       deliveryMode: 2,
       messageId: message.jobId,
       timestamp: Date.now(),
+      priority: message.priority,
     } satisfies Options.Publish,
   );
 

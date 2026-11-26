@@ -24,6 +24,7 @@ export async function publishRetry(
             deliveryMode: 2,
             messageId: message.jobId,
             timestamp: Date.now(),
+            priority: message.priority,
             headers: {
                 'x-taskflow-retry-count': retryCount,
             },

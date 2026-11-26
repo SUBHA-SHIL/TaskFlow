@@ -63,6 +63,7 @@ async function main(): Promise<void> {
     await publishJob(publisherChannel, {
       jobId: '11111111-1111-4111-8111-111111111111',
       jobType: 'messaging_test',
+      priority: 0,
     });
 
     console.log('Valid message published and confirmed.');

@@ -92,6 +92,7 @@ async function main(): Promise<void> {
         await publishJob(publisherChannel, {
             jobId: TEST_JOB_ID,
             jobType: 'retry_limit_integration_test',
+            priority: 0,
         });
 
         console.log('Test job published.');

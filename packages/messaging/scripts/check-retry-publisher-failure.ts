@@ -84,6 +84,7 @@ async function main(): Promise<void> {
     await publishJob(publisherChannel, {
       jobId: TEST_JOB_ID,
       jobType: 'retry_publisher_failure_test',
+      priority: 0,
     });
 
     console.log('Test job published.');
@@ -151,7 +152,7 @@ async function main(): Promise<void> {
 
       const retryCount =
         requeuedMessage.properties.headers?.[
-          'x-taskflow-retry-count'
+        'x-taskflow-retry-count'
         ];
 
       if (retryCount !== undefined) {

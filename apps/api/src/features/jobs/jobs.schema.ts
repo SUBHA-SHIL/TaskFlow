@@ -1,18 +1,20 @@
 import { z } from 'zod';
 
 export const createJobSchema = z
-    .object({
-        jobType: z.string().trim().min(1).max(150),
+  .object({
+    jobType: z.string().trim().min(1).max(150),
 
-        payload: z.record(z.string(), z.unknown()).default({}),
+    payload: z.record(z.string(), z.unknown()).default({}),
 
-        priority: z.number().int().default(0),
+    priority: z.number().int().min(0).max(10).default(0),
 
-        maxAttempts: z.number().int().min(1).max(100).default(3),
+    maxAttempts: z.number().int().min(1).max(100).default(3),
 
-        idempotencyKey: z.string().trim().min(1).max(255).optional(),
-    })
-    .strict();
+    runAt: z.iso.datetime({ offset: true }).optional(),
+
+    idempotencyKey: z.string().trim().min(1).max(255).optional(),
+  })
+  .strict();
 
 
 export const listJobsQuerySchema = z.object({

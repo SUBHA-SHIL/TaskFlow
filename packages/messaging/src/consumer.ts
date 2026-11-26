@@ -66,9 +66,22 @@ function parseJobMessage(rawMessage: ConsumeMessage): JobMessage {
     throw new Error('Invalid job message payload');
   }
 
+  const priority =
+    'priority' in message ? message.priority : 0;
+
+  if (
+    typeof priority !== 'number' ||
+    !Number.isSafeInteger(priority) ||
+    priority < 0 ||
+    priority > 10
+  ) {
+    throw new Error('Invalid job message priority');
+  }
+
   return {
     jobId: message.jobId,
     jobType: message.jobType,
+    priority,
   };
 }
 

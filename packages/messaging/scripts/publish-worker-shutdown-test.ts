@@ -22,6 +22,7 @@ try {
   await publishJob(channel, {
     jobId: '44444444-4444-4444-8444-444444444444',
     jobType: 'retry_publisher_failure_test',
+    priority: 0,
   });
 
   await channel.waitForConfirms();

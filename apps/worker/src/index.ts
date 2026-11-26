@@ -191,6 +191,11 @@ async function startWorker(): Promise<void> {
   const worker = await registerWorker();
 
   workerId = worker.workerId;
+  console.log('WORKER_PROCESS_IDENTITY', {
+    workerId: worker.workerId,
+    processId: process.pid,
+    parentProcessId: process.ppid,
+  });
 
   // 5. Start worker heartbeat.
   workerHeartbeat = startWorkerHeartbeat(

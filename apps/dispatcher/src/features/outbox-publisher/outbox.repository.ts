@@ -22,36 +22,42 @@ export async function claimOutboxEvents(
         const result = await client.query<OutboxEventRow>(
             `
         WITH available_events AS (
-          SELECT outbox_id
-          FROM outbox_events
-          WHERE available_at <= NOW()
-            AND (
-              status = 'pending'
-              OR (
-                status = 'processing'
-                AND locked_at < NOW() -
-                  ($2::int * INTERVAL '1 second')
-              )
-            )
-          ORDER BY available_at ASC, created_at ASC
-          LIMIT $1
-          FOR UPDATE SKIP LOCKED
+    SELECT events.outbox_id
+    FROM outbox_events AS events
+    LEFT JOIN jobs
+        ON events.aggregate_type = 'job'
+        AND jobs.job_id = events.aggregate_id
+    WHERE events.available_at <= NOW()
+      AND (
+        events.status = 'pending'
+        OR (
+          events.status = 'processing'
+          AND events.locked_at < NOW() -
+            ($2::int * INTERVAL '1 second')
         )
-        UPDATE outbox_events AS events
-        SET
-          status = 'processing',
-          locked_at = NOW(),
-          locked_by = $3,
-          attempts = events.attempts + 1,
-          updated_at = NOW()
-        FROM available_events
-        WHERE events.outbox_id = available_events.outbox_id
-        RETURNING
-          events.outbox_id,
-          events.aggregate_id,
-          events.event_type,
-          events.payload,
-          events.attempts
+      )
+    ORDER BY
+        COALESCE(jobs.priority, 0) DESC,
+        events.available_at ASC,
+        events.created_at ASC
+    LIMIT $1
+    FOR UPDATE OF events SKIP LOCKED
+)
+UPDATE outbox_events AS events
+SET
+    status = 'processing',
+    locked_at = NOW(),
+    locked_by = $3,
+    attempts = events.attempts + 1,
+    updated_at = NOW()
+FROM available_events
+WHERE events.outbox_id = available_events.outbox_id
+RETURNING
+    events.outbox_id,
+    events.aggregate_id,
+    events.event_type,
+    events.payload,
+    events.attempts
       `,
             [limit, OUTBOX_LOCK_TIMEOUT_SECONDS, dispatcherId],
         );

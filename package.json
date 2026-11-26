@@ -10,6 +10,7 @@
   "scripts": {
     "build": "npm run build -w @taskflow/config && npm run build -w @taskflow/shared && npm run build -w @taskflow/database && npm run build -w @taskflow/messaging && npm run build -w @taskflow/api && npm run build -w @taskflow/dispatcher && npm run build -w @taskflow/worker",
     "test": "npm run test --workspaces --if-present",
+    "test:integration:retry-priority": "npm run test:retry-priority --workspace=@taskflow/messaging",
     "typecheck": "npm run build -w @taskflow/config && npm run build -w @taskflow/shared && npm run build -w @taskflow/database && npm run build -w @taskflow/messaging && npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "format": "prettier --write .",

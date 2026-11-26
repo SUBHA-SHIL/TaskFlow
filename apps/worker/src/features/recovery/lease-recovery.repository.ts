@@ -4,6 +4,9 @@ import { withTransaction } from '@taskflow/database';
 const LEASE_EXPIRED_ERROR =
     'Worker lease expired before job completion';
 
+const CANCELLATION_ERROR =
+    'Job cancellation requested before worker lease expired';
+
 const MAX_RETRY_DELAY_SECONDS = 300;
 
 interface ExpiredJob {
@@ -13,6 +16,7 @@ interface ExpiredJob {
     max_attempts: number;
     locked_by: string | null;
     lease_expires_at: Date;
+    cancellation_requested: boolean;
 }
 
 export async function recoverExpiredJobs(
@@ -30,7 +34,8 @@ export async function recoverExpiredJobs(
                 total_attempts,
                 max_attempts,
                 locked_by,
-                lease_expires_at
+                lease_expires_at,
+                cancel_requested_at IS NOT NULL AS cancellation_requested
              FROM jobs
              WHERE status = 'running'
                AND lease_expires_at <= clock_timestamp()
@@ -43,19 +48,29 @@ export async function recoverExpiredJobs(
         const expiredJobs = expiredJobsResult.rows;
 
         for (const job of expiredJobs) {
-            // Retry eligibility uses the current retry-cycle counter.
-            const isRetryable = job.attempts < job.max_attempts;
+            const cancellationRequested = job.cancellation_requested;
 
-            const nextStatus = isRetryable
-                ? 'retry_scheduled'
-                : 'dead';
+            // Cancellation takes precedence over retry eligibility.
+            const isRetryable =
+                !cancellationRequested &&
+                job.attempts < job.max_attempts;
+
+            const nextStatus = cancellationRequested
+                ? 'cancelled'
+                : isRetryable
+                    ? 'retry_scheduled'
+                    : 'dead';
+
+            const attemptError = cancellationRequested
+                ? CANCELLATION_ERROR
+                : LEASE_EXPIRED_ERROR;
 
             // Attempt history uses the lifetime attempt number.
             const attemptResult = await client.query(
                 `UPDATE job_attempts
                  SET
-                    status = 'abandoned',
-                    error_message = $3,
+                    status = $3::varchar,
+                    error_message = $4,
                     finished_at = clock_timestamp()
                  WHERE job_id = $1
                    AND attempt_number = $2
@@ -63,13 +78,14 @@ export async function recoverExpiredJobs(
                 [
                     job.job_id,
                     job.total_attempts,
-                    LEASE_EXPIRED_ERROR,
+                    cancellationRequested ? 'cancelled' : 'abandoned',
+                    attemptError,
                 ],
             );
 
             if (attemptResult.rowCount !== 1) {
                 throw new Error(
-                    `Could not abandon expired attempt ${job.total_attempts} ` +
+                    `Could not finalize expired attempt ${job.total_attempts} ` +
                     `for job ${job.job_id}`,
                 );
             }
@@ -88,7 +104,10 @@ export async function recoverExpiredJobs(
                 `UPDATE jobs
                  SET
                     status = $2::varchar,
-                    last_error = $3,
+                    last_error = CASE
+                        WHEN $6::boolean THEN NULL
+                        ELSE $3
+                    END,
                     run_at = CASE
                         WHEN $4::integer IS NOT NULL
                             THEN clock_timestamp()
@@ -113,6 +132,7 @@ export async function recoverExpiredJobs(
                     LEASE_EXPIRED_ERROR,
                     retryDelaySeconds,
                     !isRetryable,
+                    cancellationRequested,
                 ],
             );
 
@@ -135,29 +155,35 @@ export async function recoverExpiredJobs(
                  )
                  VALUES (
                     $1,
-                    'job.lease_expired',
-                    'running',
                     $2,
+                    'running',
+                    $3,
                     'system',
                     jsonb_build_object(
-                        'attemptNumber', $3::integer,
-                        'retryCycleAttempt', $4::integer,
-                        'previousWorkerId', $5::text,
-                        'leaseExpiredAt', $6::timestamptz,
-                        'error', $7::text
+                        'attemptNumber', $4::integer,
+                        'retryCycleAttempt', $5::integer,
+                        'previousWorkerId', $6::text,
+                        'leaseExpiredAt', $7::timestamptz,
+                        'error', $8::text,
+                        'cancellationRequested', $9::boolean
                     )
                  )`,
                 [
                     job.job_id,
+                    cancellationRequested
+                        ? 'job.cancelled'
+                        : 'job.lease_expired',
                     nextStatus,
                     job.total_attempts,
                     job.attempts,
                     job.locked_by,
                     job.lease_expires_at,
-                    LEASE_EXPIRED_ERROR,
+                    attemptError,
+                    cancellationRequested,
                 ],
             );
 
+            // Only retryable jobs produce retry outbox events.
             if (isRetryable) {
                 await client.query(
                     `INSERT INTO outbox_events (

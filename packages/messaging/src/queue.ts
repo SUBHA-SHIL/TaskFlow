@@ -64,6 +64,7 @@ export async function assertTaskQueue(
   await channel.assertQueue(TASK_QUEUE, {
     durable: true,
     arguments: {
+      'x-max-priority': 10,
       'x-dead-letter-exchange': DEAD_LETTER_EXCHANGE,
       'x-dead-letter-routing-key': DEAD_LETTER_ROUTING_KEY,
     },
